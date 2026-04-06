@@ -1,26 +1,128 @@
 @import "tailwindcss";
 
+/* ── Design tokens ─────────────────────────────────────────────────────── */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Backgrounds */
+  --bg-base:    #09090b;          /* zinc-950 — neutral dark, no blue tint */
+  --bg-surface: rgba(255, 255, 255, 0.030);
+  --bg-raised:  rgba(255, 255, 255, 0.048);
+
+  /* Borders */
+  --border:       rgba(255, 255, 255, 0.070);
+  --border-hover: rgba(255, 255, 255, 0.130);
+
+  /* Text */
+  --text-primary:   #e8ddd5;   /* warm off-white — slight warmth matches red theme */
+  --text-secondary: #8b8580;   /* warm mid gray */
+  --text-muted:     #4a4540;   /* warm dark muted */
+  --text-faint:     #2a2520;   /* barely visible */
+
+  /* Accents */
+  --accent:      #dc2626;  /* red-600 */
+  --accent-dim:  rgba(220, 38, 38, 0.15);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-background: var(--bg-base);
+  --color-foreground: var(--text-primary);
+  --font-sans: var(--font-inter), 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, 'JetBrains Mono', monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* ── Base reset & typography ───────────────────────────────────────────── */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  font-size: 16px;
+  font-family: var(--font-inter), 'Inter', system-ui, -apple-system, sans-serif;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: inherit;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  line-height: 1.6;
+  letter-spacing: -0.01em;
+}
+
+/* Subtle red tint on scrollbar thumb */
+
+/* Form elements don't inherit font-family by default — force it */
+button, input, select, textarea, optgroup {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+/* Headings */
+h1, h2, h3, h4, h5, h6 {
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+/* Body text */
+p { line-height: 1.65; }
+
+/* Links */
+a { color: inherit; text-decoration: none; }
+
+/* Tables */
+table { border-collapse: collapse; width: 100%; }
+
+/* Scrollbar */
+::-webkit-scrollbar          { width: 5px; height: 5px; }
+::-webkit-scrollbar-track    { background: transparent; }
+::-webkit-scrollbar-thumb    { background: rgba(220,38,38,0.25); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(220,38,38,0.45); }
+
+/* Transitions */
+a, button { transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease; }
+
+/* ── Tailwind base layer overrides ─────────────────────────────────────── */
+
+@layer base {
+  /* Raise the minimum readable font size site-wide.
+     Tailwind's text-xs = 12px. This nudges all the very-small
+     arbitrary sizes up slightly via the cascade. */
+  :root { --min-font-readable: 11px; }
+
+  /* Number / price displays should always use tabular figures */
+  .tabular-nums { font-variant-numeric: tabular-nums; }
+
+  /* Improve select readability */
+  select option { background: #0f1520; color: var(--text-primary); }
+}
+
+/* ── Component helpers ─────────────────────────────────────────────────── */
+
+/* Muted label above a stat */
+.stat-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+/* Page section title */
+.section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-secondary);
+}
+
+/* Subtle card surface */
+.card-surface {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
 }
