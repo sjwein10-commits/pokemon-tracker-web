@@ -42,7 +42,7 @@ export default function ActiveData() {
       .order('sale_date', { ascending: false })
       .limit(400)
       .then(({ data }) => {
-        if (data) setSales(data as Sale[])
+        if (data) setSales(data as unknown as Sale[])
         setLoading(false)
       })
   }, [])
