@@ -417,14 +417,32 @@ export default function CardDetail() {
             </div>
 
             {/* ── AI Sell Signal Banner ───────────────────────────────── */}
-            {!loading && snapshot && snapshot.avg_price > 0 && snapshot.projected_price > 0 && (() => {
-              const pctChange = ((snapshot.projected_price - snapshot.avg_price) / snapshot.avg_price) * 100
-              const signal = pctChange >= 8 ? 'BUY' : pctChange <= -5 ? 'SELL' : 'HOLD'
+            {!loading && snapshot && snapshot.avg_price > 0 && (() => {
+              const { avg_price, low_price, high_price, projected_price } = snapshot
+              const hasMeaningfulProjection =
+                projected_price > 1 && Math.abs(projected_price - avg_price) / avg_price > 0.01
+              const projPct = hasMeaningfulProjection
+                ? ((projected_price - avg_price) / avg_price) * 100
+                : 0
+              const rangeIsReliable =
+                low_price > 0 && high_price > low_price &&
+                high_price / low_price < 12 && low_price > avg_price * 0.05
+              let rangePct = 0
+              if (rangeIsReliable) {
+                const posInRange = (avg_price - low_price) / (high_price - low_price)
+                rangePct = (0.5 - posInRange) * 18
+              }
+              const effectivePct = hasMeaningfulProjection
+                ? projPct * 0.65 + rangePct * 0.35
+                : rangePct
+              const displayPct = hasMeaningfulProjection ? projPct : rangePct
+              const signal = effectivePct >= 4 ? 'BUY' : effectivePct <= -3.5 ? 'SELL' : 'HOLD'
               const confidence = Math.round(
                 signal === 'HOLD'
-                  ? Math.min(88, 58 + Math.abs(pctChange) * 2.5)
-                  : Math.min(93, 62 + Math.abs(pctChange) * 1.4)
+                  ? Math.min(82, 54 + Math.abs(effectivePct) * 4)
+                  : Math.min(89, 60 + Math.abs(effectivePct) * 2.8)
               )
+              const pctChange = Math.round(displayPct * 10) / 10
               const volatility =
                 snapshot.low_price && snapshot.high_price && snapshot.avg_price
                   ? ((snapshot.high_price - snapshot.low_price) / snapshot.avg_price) * 100

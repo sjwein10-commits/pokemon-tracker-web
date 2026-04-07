@@ -30,21 +30,54 @@ function getCardImageUrl(cardNumber: string) {
 }
 
 function getSellSignal(snap: Snapshot): { signal: SellSignal; confidence: number; pctChange: number } {
-  if (!snap.projected_price || !snap.avg_price) return { signal: 'HOLD', confidence: 52, pctChange: 0 }
-  const pctChange = ((snap.projected_price - snap.avg_price) / snap.avg_price) * 100
+  const { avg_price, low_price, high_price, projected_price } = snap
+  if (!avg_price) return { signal: 'HOLD', confidence: 45, pctChange: 0 }
+
+  // Check if projected_price is a real forward forecast or just a copy of avg_price
+  const hasMeaningfulProjection =
+    projected_price > 1 && Math.abs(projected_price - avg_price) / avg_price > 0.01
+
+  // Projection-based % change
+  const projPct = hasMeaningfulProjection
+    ? ((projected_price - avg_price) / avg_price) * 100
+    : 0
+
+  // Range-position signal: cards near their price high → bearish (sell), near low → bullish (buy)
+  // Only trust if range isn't wildly corrupt (ratio < 12x and low > 5% of avg)
+  const rangeIsReliable =
+    low_price > 0 &&
+    high_price > low_price &&
+    high_price / low_price < 12 &&
+    low_price > avg_price * 0.05
+
+  let rangePct = 0
+  if (rangeIsReliable) {
+    const posInRange = (avg_price - low_price) / (high_price - low_price) // 0=at low, 1=at high
+    // Near high (>0.65) → sell pressure; near low (<0.35) → buy pressure
+    rangePct = (0.5 - posInRange) * 18 // maps to roughly ±9%
+  }
+
+  // Combine: meaningful AI projection takes 65% weight, range position 35%
+  // If no valid projection, rely entirely on range position
+  const effectivePct = hasMeaningfulProjection
+    ? projPct * 0.65 + rangePct * 0.35
+    : rangePct
+
   let signal: SellSignal
   let confidence: number
-  if (pctChange >= 8) {
+  if (effectivePct >= 4) {
     signal = 'BUY'
-    confidence = Math.min(93, 62 + pctChange * 1.4)
-  } else if (pctChange <= -5) {
+    confidence = Math.min(89, 60 + Math.abs(effectivePct) * 2.8)
+  } else if (effectivePct <= -3.5) {
     signal = 'SELL'
-    confidence = Math.min(93, 62 + Math.abs(pctChange) * 1.4)
+    confidence = Math.min(89, 60 + Math.abs(effectivePct) * 2.8)
   } else {
     signal = 'HOLD'
-    confidence = Math.min(88, 58 + Math.abs(pctChange) * 2.5)
+    confidence = Math.min(82, 54 + Math.abs(effectivePct) * 4)
   }
-  return { signal, confidence: Math.round(confidence), pctChange: Math.round(pctChange * 10) / 10 }
+
+  const displayPct = hasMeaningfulProjection ? projPct : rangePct
+  return { signal, confidence: Math.round(confidence), pctChange: Math.round(displayPct * 10) / 10 }
 }
 
 function SignalBadge({ signal, size = 'sm' }: { signal: SellSignal; size?: 'sm' | 'lg' }) {
