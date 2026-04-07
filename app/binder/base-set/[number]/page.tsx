@@ -4,8 +4,10 @@ import { useEffect, useState } from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { supabase } from '../../../../lib/supabase'
 import { BASE_SET_CARDS, BaseSetCard } from '../../../../lib/base-set-cards'
+import { useAuth } from '../../../../lib/auth-context'
 
 interface Sale {
   id: number
@@ -27,6 +29,13 @@ interface GradePrices {
   psa8: number | null
   psa9: number | null
   psa10: number | null
+}
+
+interface PriceAlert {
+  id: number
+  grade: number
+  target_price: number
+  triggered: boolean
 }
 
 // ── Design tokens ──────────────────────────────────────────────────────────
@@ -86,13 +95,41 @@ function fmt(n: number | null) {
   return `$${n.toLocaleString()}`
 }
 
+function calcSellStats(sales: Sale[]) {
+  if (sales.length < 2) return null
+
+  // Sort oldest → newest
+  const sorted = [...sales].sort(
+    (a, b) => new Date(a.sale_date).getTime() - new Date(b.sale_date).getTime()
+  )
+
+  // Average gap between consecutive sales (in days)
+  const gaps: number[] = []
+  for (let i = 1; i < sorted.length; i++) {
+    const diff = new Date(sorted[i].sale_date).getTime() - new Date(sorted[i - 1].sale_date).getTime()
+    gaps.push(diff / (1000 * 60 * 60 * 24))
+  }
+  const avgDays = gaps.reduce((a, b) => a + b, 0) / gaps.length
+
+  // Sales in last 30 days
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000
+  const recent = sales.filter((s) => new Date(s.sale_date).getTime() > cutoff).length
+
+  // Liquidity label
+  const liquidity =
+    avgDays <= 3  ? { label: 'Very High', color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20' } :
+    avgDays <= 7  ? { label: 'High',      color: 'text-green-400',   bg: 'bg-green-500/10 border-green-500/20'   } :
+    avgDays <= 14 ? { label: 'Medium',    color: 'text-amber-400',   bg: 'bg-amber-500/10 border-amber-500/20'   } :
+                   { label: 'Low',        color: 'text-red-400',     bg: 'bg-red-500/10 border-red-500/20'       }
+
+  return { avgDays: Math.round(avgDays), recent, liquidity }
+}
+
 function gradeBadge(grade: number) {
   if (grade === 10) return 'bg-emerald-500/15 text-emerald-400 border-emerald-500/25'
   if (grade === 9)  return 'bg-blue-500/15 text-blue-400 border-blue-500/25'
   return 'bg-amber-500/15 text-amber-400 border-amber-500/25'
 }
-
-// ── Prev / Next navigation ──────────────────────────────────────────────────
 
 function getAdjacentCards(number: string) {
   const idx = BASE_SET_CARDS.findIndex((c) => c.number === number)
@@ -102,32 +139,61 @@ function getAdjacentCards(number: string) {
   }
 }
 
+// ── Custom chart tooltip ───────────────────────────────────────────────────
+
+function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: { value: number; name: string; color: string }[]; label?: string }) {
+  if (!active || !payload?.length) return null
+  return (
+    <div className="bg-[#0f0f11] border border-white/[0.10] rounded-xl px-3 py-2.5 text-xs shadow-xl">
+      <p className="text-slate-500 mb-1.5">{label}</p>
+      {payload.map((p) => (
+        <p key={p.name} style={{ color: p.color }} className="font-bold">
+          {p.name}: ${p.value.toLocaleString()}
+        </p>
+      ))}
+    </div>
+  )
+}
+
 // ── Main ───────────────────────────────────────────────────────────────────
 
 export default function CardDetail() {
   const { number } = useParams<{ number: string }>()
+  const { user } = useAuth()
   const card: BaseSetCard | undefined = BASE_SET_CARDS.find((c) => c.number === number)
 
-  const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
+  const [snapshot, setSnapshot]       = useState<Snapshot | null>(null)
+  const [allSnapshots, setAllSnapshots] = useState<Snapshot[]>([])
   const [gradePrices, setGradePrices] = useState<GradePrices>({ psa8: null, psa9: null, psa10: null })
   const [recentSales, setRecentSales] = useState<Sale[]>([])
-  const [loading, setLoading] = useState(true)
-  const [projection, setProjection] = useState<string | null>(null)
+  const [loading, setLoading]         = useState(true)
+  const [projection, setProjection]   = useState<string | null>(null)
   const [projectionLoading, setProjectionLoading] = useState(false)
+
+  // Alert state
+  const [alerts, setAlerts]           = useState<PriceAlert[]>([])
+  const [showAlertForm, setShowAlertForm] = useState(false)
+  const [alertGrade, setAlertGrade]   = useState<8 | 9 | 10>(9)
+  const [alertPrice, setAlertPrice]   = useState('')
+  const [alertSaving, setAlertSaving] = useState(false)
+  const [alertSuccess, setAlertSuccess] = useState(false)
 
   useEffect(() => {
     if (!card) { setLoading(false); return }
-    setSnapshot(null); setGradePrices({ psa8: null, psa9: null, psa10: null })
+    setSnapshot(null); setAllSnapshots([]); setGradePrices({ psa8: null, psa9: null, psa10: null })
     setRecentSales([]); setProjection(null); setLoading(true)
 
     async function load() {
       const { data: dbCard } = await supabase.from('cards').select('id').eq('name', card!.name).single()
       if (!dbCard) { setLoading(false); return }
 
-      const [snapRes, salesRes] = await Promise.all([
+      const [snapRes, allSnapsRes, salesRes] = await Promise.all([
         supabase.from('price_snapshots')
           .select('avg_price, low_price, high_price, projection_notes, snapshot_date')
           .eq('card_id', dbCard.id).order('snapshot_date', { ascending: false }).limit(1).single(),
+        supabase.from('price_snapshots')
+          .select('avg_price, low_price, high_price, projection_notes, snapshot_date')
+          .eq('card_id', dbCard.id).order('snapshot_date', { ascending: true }),
         supabase.from('sales')
           .select('id, sale_price, sale_date, grade_value, source')
           .eq('card_id', dbCard.id).eq('grade_company', 'PSA').in('grade_value', [8, 9, 10])
@@ -135,6 +201,7 @@ export default function CardDetail() {
       ])
 
       if (snapRes.data) setSnapshot(snapRes.data)
+      if (allSnapsRes.data) setAllSnapshots(allSnapsRes.data)
       const sales = salesRes.data || []
       setRecentSales(sales)
 
@@ -159,9 +226,47 @@ export default function CardDetail() {
           .then((d) => { if (d.projection) setProjection(d.projection) })
           .finally(() => setProjectionLoading(false))
       }
+
+      // Load user's alerts for this card
+      if (user) {
+        const { data: alertData } = await supabase
+          .from('price_alerts')
+          .select('id, grade, target_price, triggered')
+          .eq('user_id', user.id)
+          .eq('card_id', dbCard.id)
+        if (alertData) setAlerts(alertData)
+      }
     }
     load()
-  }, [card])
+  }, [card, user])
+
+  async function saveAlert() {
+    if (!user || !card || !alertPrice) return
+    setAlertSaving(true)
+    const { data: dbCard } = await supabase.from('cards').select('id').eq('name', card.name).single()
+    if (dbCard) {
+      await supabase.from('price_alerts').insert({
+        user_id: user.id,
+        card_id: dbCard.id,
+        card_name: card.name,
+        card_number: card.number,
+        grade: alertGrade,
+        target_price: parseFloat(alertPrice),
+      })
+      const { data: alertData } = await supabase
+        .from('price_alerts').select('id, grade, target_price, triggered')
+        .eq('user_id', user.id).eq('card_id', dbCard.id)
+      if (alertData) setAlerts(alertData)
+    }
+    setAlertPrice(''); setShowAlertForm(false); setAlertSuccess(true)
+    setTimeout(() => setAlertSuccess(false), 3000)
+    setAlertSaving(false)
+  }
+
+  async function deleteAlert(alertId: number) {
+    await supabase.from('price_alerts').delete().eq('id', alertId)
+    setAlerts((prev) => prev.filter((a) => a.id !== alertId))
+  }
 
   if (!card) {
     return (
@@ -174,10 +279,10 @@ export default function CardDetail() {
     )
   }
 
-  const glow    = TYPE_GLOW[card.type]   || TYPE_GLOW.Colorless
-  const accent  = TYPE_ACCENT[card.type] || TYPE_ACCENT.Colorless
-  const typeText = TYPE_TEXT[card.type]  || 'text-slate-400'
-  const typeBg   = TYPE_BG[card.type]   || TYPE_BG.Colorless
+  const glow     = TYPE_GLOW[card.type]   || TYPE_GLOW.Colorless
+  const accent   = TYPE_ACCENT[card.type] || TYPE_ACCENT.Colorless
+  const typeText = TYPE_TEXT[card.type]   || 'text-slate-400'
+  const typeBg   = TYPE_BG[card.type]    || TYPE_BG.Colorless
   const hasData  = !!(snapshot || gradePrices.psa9 || gradePrices.psa10 || gradePrices.psa8)
   const { prev, next } = getAdjacentCards(number)
 
@@ -188,6 +293,21 @@ export default function CardDetail() {
     low != null && high != null && high !== low
       ? Math.max(2, Math.min(98, Math.round(((v - low) / (high - low)) * 100)))
       : 50
+
+  // Chart data — deduplicate by date, keep latest per day
+  const chartData = allSnapshots
+    .filter((s) => s.avg_price > 0)
+    .reduce((acc: Record<string, Snapshot>, s) => {
+      const d = s.snapshot_date.slice(0, 10)
+      if (!acc[d] || s.snapshot_date > acc[d].snapshot_date) acc[d] = s
+      return acc
+    }, {})
+  const chartPoints = Object.entries(chartData)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, s]) => ({
+      date: new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      'Avg Price': s.avg_price,
+    }))
 
   return (
     <div className="min-h-screen bg-[#09090b]">
@@ -226,7 +346,7 @@ export default function CardDetail() {
         {/* ── Main layout ──────────────────────────────────────────────── */}
         <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-8 mb-8">
 
-          {/* Left: Card image (sticky on desktop) */}
+          {/* Left: Card image */}
           <div className="lg:self-start lg:sticky lg:top-20">
             <div
               className="relative w-56 sm:w-64 lg:w-full aspect-[2.5/3.5] rounded-2xl overflow-hidden mx-auto"
@@ -235,20 +355,17 @@ export default function CardDetail() {
               <Image src={card.imageUrl} alt={card.name} fill className="object-cover" unoptimized priority />
             </div>
 
-            {/* Card meta below image */}
             <div className="mt-5 space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-slate-600">Card Number</span>
-                <span className="text-slate-300 font-medium">#{card.number} / 102</span>
-              </div>
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-slate-600">Set</span>
-                <span className="text-slate-300 font-medium">Base Set 1999</span>
-              </div>
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-slate-600">Rarity</span>
-                <span className="text-slate-300 font-medium">{card.rarity || '—'}</span>
-              </div>
+              {[
+                { label: 'Card Number', value: `#${card.number} / 102` },
+                { label: 'Set',         value: 'Base Set 1999' },
+                { label: 'Rarity',      value: card.rarity || '—' },
+              ].map(({ label, value }) => (
+                <div key={label} className="flex items-center justify-between text-xs">
+                  <span className="text-slate-600">{label}</span>
+                  <span className="text-slate-300 font-medium">{value}</span>
+                </div>
+              ))}
               <div className="flex items-center justify-between text-xs">
                 <span className="text-slate-600">Type</span>
                 <span className={`font-medium ${typeText}`}>{card.type}</span>
@@ -260,6 +377,20 @@ export default function CardDetail() {
                 </div>
               )}
             </div>
+
+            {/* PSA Population link */}
+            <a
+              href="https://www.psacard.com/pop/trading-card-games/1999-pokemon/base-set/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-5 flex items-center justify-between w-full bg-white/[0.03] hover:bg-white/[0.05] border border-white/[0.07] rounded-xl px-4 py-3 transition group"
+            >
+              <div>
+                <p className="text-xs font-semibold text-white">PSA Population</p>
+                <p className="text-[11px] text-slate-600 mt-0.5">View grading census →</p>
+              </div>
+              <span className="text-slate-600 group-hover:text-slate-400 text-sm">↗</span>
+            </a>
           </div>
 
           {/* Right: Data panel */}
@@ -312,12 +443,40 @@ export default function CardDetail() {
               </div>
             )}
 
+            {/* ── Sell Speed ──────────────────────────────────────────── */}
+            {!loading && recentSales.length >= 2 && (() => {
+              const stats = calcSellStats(recentSales)
+              if (!stats) return null
+              return (
+                <div className="bg-white/[0.03] border border-white/[0.07] rounded-2xl p-5">
+                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">Sell Speed</p>
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="text-center">
+                      <p className="text-2xl font-bold text-white tabular-nums">{stats.avgDays}</p>
+                      <p className="text-xs text-slate-600 mt-1">avg days between sales</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-2xl font-bold text-white tabular-nums">{stats.recent}</p>
+                      <p className="text-xs text-slate-600 mt-1">sales in last 30 days</p>
+                    </div>
+                    <div className="text-center">
+                      <div className={`inline-flex items-center px-3 py-1 rounded-full border text-xs font-bold ${stats.liquidity.bg} ${stats.liquidity.color}`}>
+                        {stats.liquidity.label}
+                      </div>
+                      <p className="text-xs text-slate-600 mt-1.5">liquidity</p>
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-slate-700 mt-4 leading-relaxed">
+                    Based on {recentSales.length} tracked PSA listings. Faster sell speed = easier to exit your position at market price.
+                  </p>
+                </div>
+              )
+            })()}
+
             {/* Price Range */}
             {hasData && low != null && high != null && avg != null && low !== high && (
               <div className="bg-white/[0.03] border border-white/[0.07] rounded-2xl p-5">
                 <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-6">Price Range</p>
-
-                {/* Bar */}
                 <div className="relative mx-4 mb-10">
                   <div className="h-1.5 rounded-full bg-white/[0.07]">
                     <div className={`h-full rounded-full bg-gradient-to-r ${accent} opacity-70`} style={{ width: '100%' }} />
@@ -335,7 +494,6 @@ export default function CardDetail() {
                     </div>
                   ))}
                 </div>
-
                 <div className="grid grid-cols-3 divide-x divide-white/[0.06] text-center mt-2">
                   <div className="px-3">
                     <p className="text-xs text-slate-600 uppercase tracking-wider mb-1">Lowest</p>
@@ -353,11 +511,43 @@ export default function CardDetail() {
               </div>
             )}
 
-            {/* AI Projection */}
+            {/* ── Price History Chart ──────────────────────────────────── */}
+            {chartPoints.length > 1 && (
+              <div className="bg-white/[0.03] border border-white/[0.07] rounded-2xl p-5">
+                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-5">Price History</p>
+                <ResponsiveContainer width="100%" height={180}>
+                  <LineChart data={chartPoints} margin={{ top: 4, right: 8, bottom: 0, left: -10 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                    <XAxis
+                      dataKey="date"
+                      tick={{ fill: '#4a4540', fontSize: 10 }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      tick={{ fill: '#4a4540', fontSize: 10 }}
+                      axisLine={false}
+                      tickLine={false}
+                      tickFormatter={(v) => `$${v}`}
+                    />
+                    <Tooltip content={<ChartTooltip />} />
+                    <Line
+                      type="monotone"
+                      dataKey="Avg Price"
+                      stroke="#dc2626"
+                      strokeWidth={2}
+                      dot={false}
+                      activeDot={{ r: 4, fill: '#dc2626', strokeWidth: 0 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+
+            {/* ── AI Projection ────────────────────────────────────────── */}
             <div className="relative bg-gradient-to-br from-red-950/40 via-rose-950/20 to-transparent border border-red-500/15 rounded-2xl p-6 overflow-hidden">
               <div className="absolute -top-8 -right-8 w-40 h-40 bg-red-500/10 rounded-full blur-2xl pointer-events-none" />
               <div className="absolute -bottom-8 -left-8 w-32 h-32 bg-rose-600/10 rounded-full blur-2xl pointer-events-none" />
-
               <div className="relative">
                 <div className="flex items-start justify-between mb-4">
                   <div className="flex items-center gap-2.5">
@@ -375,7 +565,6 @@ export default function CardDetail() {
                     </span>
                   )}
                 </div>
-
                 {projectionLoading ? (
                   <div className="flex items-center gap-3 py-2">
                     <div className="flex gap-1">
@@ -392,6 +581,95 @@ export default function CardDetail() {
                   <p className="text-xs text-slate-600">Unable to generate projection at this time.</p>
                 )}
               </div>
+            </div>
+
+            {/* ── Price Alerts ─────────────────────────────────────────── */}
+            <div className="bg-white/[0.03] border border-white/[0.07] rounded-2xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <p className="text-sm font-semibold text-white">Price Alerts</p>
+                  <p className="text-xs text-slate-600 mt-0.5">Get notified when this card hits your target price</p>
+                </div>
+                {user && (
+                  <button
+                    onClick={() => setShowAlertForm(!showAlertForm)}
+                    className="text-xs font-semibold text-white bg-red-600 hover:bg-red-500 px-3.5 py-1.5 rounded-lg transition"
+                  >
+                    {showAlertForm ? 'Cancel' : '+ Add Alert'}
+                  </button>
+                )}
+              </div>
+
+              {!user && (
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-slate-500">Log in to set price alerts.</p>
+                  <Link href="/auth/login" className="text-xs text-red-400 hover:text-red-300 font-medium transition">Log In →</Link>
+                </div>
+              )}
+
+              {alertSuccess && (
+                <p className="text-xs text-emerald-400 mb-3">Alert set successfully.</p>
+              )}
+
+              {showAlertForm && user && (
+                <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4 mb-4 space-y-3">
+                  <div className="flex gap-3">
+                    <div className="flex-1">
+                      <label className="block text-xs text-slate-500 mb-1.5">Grade</label>
+                      <select
+                        value={alertGrade}
+                        onChange={(e) => setAlertGrade(Number(e.target.value) as 8 | 9 | 10)}
+                        className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-red-500/50 transition"
+                      >
+                        <option value={8}>PSA 8</option>
+                        <option value={9}>PSA 9</option>
+                        <option value={10}>PSA 10</option>
+                      </select>
+                    </div>
+                    <div className="flex-1">
+                      <label className="block text-xs text-slate-500 mb-1.5">Target Price ($)</label>
+                      <input
+                        type="number"
+                        value={alertPrice}
+                        onChange={(e) => setAlertPrice(e.target.value)}
+                        placeholder="e.g. 500"
+                        className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-red-500/50 transition"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    onClick={saveAlert}
+                    disabled={alertSaving || !alertPrice}
+                    className="w-full bg-red-600 hover:bg-red-500 disabled:opacity-40 text-white text-sm font-semibold py-2 rounded-lg transition"
+                  >
+                    {alertSaving ? 'Saving…' : 'Set Alert'}
+                  </button>
+                </div>
+              )}
+
+              {alerts.length > 0 && (
+                <div className="space-y-2">
+                  {alerts.map((a) => (
+                    <div key={a.id} className="flex items-center justify-between bg-white/[0.02] border border-white/[0.05] rounded-lg px-3 py-2.5">
+                      <div className="flex items-center gap-3">
+                        <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md border ${gradeBadge(a.grade)}`}>
+                          PSA {a.grade}
+                        </span>
+                        <span className="text-sm font-bold text-white">${a.target_price.toLocaleString()}</span>
+                        {a.triggered && (
+                          <span className="text-[11px] text-emerald-400 font-semibold">● Triggered</span>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => deleteAlert(a.id)}
+                        className="text-xs text-slate-600 hover:text-red-400 transition"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
           </div>
