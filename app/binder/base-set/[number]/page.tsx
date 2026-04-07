@@ -21,6 +21,7 @@ interface Snapshot {
   avg_price: number
   low_price: number
   high_price: number
+  projected_price: number
   projection_notes: string
   snapshot_date: string
 }
@@ -189,10 +190,10 @@ export default function CardDetail() {
 
       const [snapRes, allSnapsRes, salesRes] = await Promise.all([
         supabase.from('price_snapshots')
-          .select('avg_price, low_price, high_price, projection_notes, snapshot_date')
+          .select('avg_price, low_price, high_price, projected_price, projection_notes, snapshot_date')
           .eq('card_id', dbCard.id).order('snapshot_date', { ascending: false }).limit(1).single(),
         supabase.from('price_snapshots')
-          .select('avg_price, low_price, high_price, projection_notes, snapshot_date')
+          .select('avg_price, low_price, high_price, projected_price, projection_notes, snapshot_date')
           .eq('card_id', dbCard.id).order('snapshot_date', { ascending: true }),
         supabase.from('sales')
           .select('id, sale_price, sale_date, grade_value, source')
@@ -414,6 +415,70 @@ export default function CardDetail() {
               <h1 className="text-4xl font-bold text-white tracking-tight">{card.name}</h1>
               <p className="text-slate-500 text-sm mt-1">Base Set · 1999 · Wizards of the Coast</p>
             </div>
+
+            {/* ── AI Sell Signal Banner ───────────────────────────────── */}
+            {!loading && snapshot && snapshot.avg_price > 0 && snapshot.projected_price > 0 && (() => {
+              const pctChange = ((snapshot.projected_price - snapshot.avg_price) / snapshot.avg_price) * 100
+              const signal = pctChange >= 8 ? 'BUY' : pctChange <= -5 ? 'SELL' : 'HOLD'
+              const confidence = Math.round(
+                signal === 'HOLD'
+                  ? Math.min(88, 58 + Math.abs(pctChange) * 2.5)
+                  : Math.min(93, 62 + Math.abs(pctChange) * 1.4)
+              )
+              const volatility =
+                snapshot.low_price && snapshot.high_price && snapshot.avg_price
+                  ? ((snapshot.high_price - snapshot.low_price) / snapshot.avg_price) * 100
+                  : null
+              const volLabel =
+                volatility == null ? null :
+                volatility > 35 ? { label: 'High Volatility', color: 'text-red-400', bg: 'bg-red-500/10 border-red-500/25' } :
+                volatility > 18 ? { label: 'Medium Volatility', color: 'text-amber-400', bg: 'bg-amber-500/10 border-amber-500/25' } :
+                { label: 'Low Volatility', color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/25' }
+
+              const bannerColors = {
+                SELL: { banner: 'from-red-950/60 to-red-950/20 border-red-500/30', text: 'text-red-400', label: 'Sell Now' },
+                BUY:  { banner: 'from-emerald-950/50 to-emerald-950/15 border-emerald-500/25', text: 'text-emerald-400', label: 'Good Time to Buy' },
+                HOLD: { banner: 'from-amber-950/40 to-amber-950/10 border-amber-500/20', text: 'text-amber-400', label: 'Hold Position' },
+              }
+              const { banner, text, label } = bannerColors[signal]
+
+              return (
+                <div className={`bg-gradient-to-br ${banner} border rounded-2xl p-5`}>
+                  <div className="flex items-center justify-between flex-wrap gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-red-500 to-rose-700 flex items-center justify-center text-white text-[11px] font-bold shrink-0">
+                        AI
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold mb-0.5">
+                          AI Recommendation
+                        </p>
+                        <p className={`text-lg font-bold ${text}`}>
+                          Recommended Action: {label}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      {volLabel && (
+                        <span className={`text-[11px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full border ${volLabel.bg} ${volLabel.color}`}>
+                          {volLabel.label}
+                        </span>
+                      )}
+                      <div className="text-right">
+                        <p className="text-[10px] text-slate-500 uppercase tracking-wide">30d Proj</p>
+                        <p className={`text-sm font-bold tabular-nums ${pctChange >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                          {pctChange >= 0 ? '+' : ''}{pctChange.toFixed(1)}%
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-[10px] text-slate-500 uppercase tracking-wide">Confidence</p>
+                        <p className="text-sm font-bold text-slate-300 tabular-nums">{confidence}%</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )
+            })()}
 
             {/* PSA Grade Prices */}
             {loading ? (
