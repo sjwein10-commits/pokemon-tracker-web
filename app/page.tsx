@@ -149,7 +149,7 @@ export default function Home() {
       const { data } = await supabase
         .from('price_snapshots')
         .select('*, cards(name, rarity, is_holographic, card_number)')
-        .order('avg_price', { ascending: false })
+        .order('snapshot_date', { ascending: false })
       if (data) {
         const seen = new Set<string>()
         const deduped = data.filter((s: Snapshot) => {
