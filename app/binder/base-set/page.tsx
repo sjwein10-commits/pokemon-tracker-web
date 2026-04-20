@@ -55,6 +55,18 @@ const RARITY_COLORS: Record<string, string> = {
   'Energy':    'text-teal-400',
 }
 
+// ── IQR outlier filter (mirrors projections.py logic) ───────────────────────
+function filterOutliers(prices: number[]): number[] {
+  const valid = prices.filter((p) => p > 1)
+  if (valid.length < 3) return valid
+  const sorted = [...valid].sort((a, b) => a - b)
+  const q1 = sorted[Math.floor(sorted.length / 4)]
+  const q3 = sorted[Math.floor((3 * sorted.length) / 4)]
+  const iqr = q3 - q1
+  if (iqr === 0) return valid
+  return valid.filter((p) => p >= q1 - 1.5 * iqr && p <= q3 + 1.5 * iqr)
+}
+
 // ── Main component ──────────────────────────────────────────────────────────
 
 export default function BaseSet() {
@@ -110,8 +122,9 @@ export default function BaseSet() {
         })
         Object.entries(byCard).forEach(([cid, salesArr]) => {
           const avg = (grade: number) => {
-            const prices = salesArr.filter((s) => s.grade_value === grade).map((s) => s.sale_price)
-            return prices.length ? Math.round(prices.reduce((a, b) => a + b, 0) / prices.length) : null
+            const raw = salesArr.filter((s) => s.grade_value === grade).map((s) => s.sale_price)
+            const filtered = filterOutliers(raw)
+            return filtered.length ? Math.round(filtered.reduce((a, b) => a + b, 0) / filtered.length) : null
           }
           gradesByCardId[Number(cid)] = { psa8: avg(8), psa9: avg(9), psa10: avg(10) }
         })
