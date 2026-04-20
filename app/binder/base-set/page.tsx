@@ -96,7 +96,7 @@ export default function BaseSet() {
       // Fetch all PSA 8-10 sales for grade breakdown
       const { data: sales } = await supabase
         .from('sales')
-        .select('card_id, sale_price, grade_value')
+        .select('card_id, sale_price, grade_value, source_listing_id')
         .eq('grade_company', 'PSA')
         .in('grade_value', [8, 9, 10])
 
@@ -121,8 +121,16 @@ export default function BaseSet() {
           byCard[s.card_id].push(s)
         })
         Object.entries(byCard).forEach(([cid, salesArr]) => {
+          // Deduplicate by source_listing_id to avoid repeated pipeline runs inflating averages
+          const seen = new Set<string>()
+          const unique = salesArr.filter((s) => {
+            if (!s.source_listing_id) return true
+            if (seen.has(s.source_listing_id)) return false
+            seen.add(s.source_listing_id)
+            return true
+          })
           const avg = (grade: number) => {
-            const raw = salesArr.filter((s) => s.grade_value === grade).map((s) => s.sale_price)
+            const raw = unique.filter((s) => s.grade_value === grade).map((s) => s.sale_price)
             const filtered = filterOutliers(raw)
             return filtered.length ? Math.round(filtered.reduce((a, b) => a + b, 0) / filtered.length) : null
           }

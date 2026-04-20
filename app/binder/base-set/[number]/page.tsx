@@ -208,18 +208,26 @@ export default function CardDetail() {
           .select('avg_price, low_price, high_price, projected_price, projection_notes, snapshot_date')
           .eq('card_id', dbCard.id).order('snapshot_date', { ascending: true }),
         supabase.from('sales')
-          .select('id, sale_price, sale_date, grade_value, source')
+          .select('id, sale_price, sale_date, grade_value, source, source_listing_id')
           .eq('card_id', dbCard.id).eq('grade_company', 'PSA').in('grade_value', [8, 9, 10])
-          .order('sale_date', { ascending: false }).limit(20),
+          .order('sale_date', { ascending: false }).limit(100),
       ])
 
       if (snapRes.data) setSnapshot(snapRes.data)
       if (allSnapsRes.data) setAllSnapshots(allSnapsRes.data)
       const sales = salesRes.data || []
-      setRecentSales(sales)
+      setRecentSales(sales.slice(0, 20)) // show only 20 in the table
 
+      // Deduplicate by source_listing_id before computing grade averages
+      const seen = new Set<string>()
+      const uniqueSales = sales.filter((s) => {
+        if (!s.source_listing_id) return true
+        if (seen.has(s.source_listing_id)) return false
+        seen.add(s.source_listing_id)
+        return true
+      })
       const avg = (grade: number) => {
-        const raw = sales.filter((s) => s.grade_value === grade).map((s) => s.sale_price)
+        const raw = uniqueSales.filter((s) => s.grade_value === grade).map((s) => s.sale_price)
         const filtered = filterOutliers(raw)
         return filtered.length ? Math.round(filtered.reduce((a, b) => a + b, 0) / filtered.length) : null
       }

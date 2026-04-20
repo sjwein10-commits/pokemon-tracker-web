@@ -105,20 +105,21 @@ function SignalBadge({ signal, size = 'sm' }: { signal: SellSignal; size?: 'sm' 
   )
 }
 
-function Sparkline({ snap }: { snap: Snapshot }) {
+function Sparkline({ history }: { history: Snapshot[] }) {
   const { pts, isUp } = useMemo(() => {
-    const low = snap.low_price || snap.avg_price * 0.82
-    const high = snap.high_price || snap.avg_price * 1.18
-    const proj = snap.projected_price || snap.avg_price
-    const raw = [low * 1.08, high * 0.94, snap.avg_price * 0.96, low * 1.15, snap.avg_price * 1.03, snap.avg_price * 0.98, proj]
-    const yMin = Math.min(...raw)
-    const yMax = Math.max(...raw)
+    const prices = history.map((s) => s.avg_price).filter((p) => p > 0)
+    if (prices.length === 0) return { pts: [], isUp: true }
+    const yMin = Math.min(...prices)
+    const yMax = Math.max(...prices)
     const yRange = yMax - yMin || 1
     return {
-      pts: raw.map((y, i) => ({ x: (i / (raw.length - 1)) * 100, y: 40 - ((y - yMin) / yRange) * 36 - 2 })),
-      isUp: proj >= snap.avg_price,
+      pts: prices.map((y, i) => ({
+        x: (i / Math.max(prices.length - 1, 1)) * 100,
+        y: 40 - ((y - yMin) / yRange) * 36 - 2,
+      })),
+      isUp: prices[prices.length - 1] >= prices[0],
     }
-  }, [snap])
+  }, [history])
 
   const d = pts.reduce((acc, p, i) => {
     if (i === 0) return `M${p.x},${p.y}`
@@ -141,6 +142,7 @@ function Sparkline({ snap }: { snap: Snapshot }) {
 
 export default function Home() {
   const [snapshots, setSnapshots] = useState<Snapshot[]>([])
+  const [historyByCard, setHistoryByCard] = useState<Record<string, Snapshot[]>>({})
   const [filter, setFilter] = useState<FilterType>('all')
   const [sortBy, setSortBy] = useState<SortType>('change')
 
@@ -149,15 +151,19 @@ export default function Home() {
       const { data } = await supabase
         .from('price_snapshots')
         .select('*, cards(name, rarity, is_holographic, card_number)')
-        .order('snapshot_date', { ascending: false })
+        .order('snapshot_date', { ascending: true }) // oldest first so history is chronological
       if (data) {
-        const seen = new Set<string>()
-        const deduped = data.filter((s: Snapshot) => {
-          if (seen.has(s.cards.name)) return false
-          seen.add(s.cards.name)
-          return true
+        // Group all snapshots by card name
+        const byCard: Record<string, Snapshot[]> = {}
+        data.forEach((s: Snapshot) => {
+          const name = s.cards.name
+          if (!byCard[name]) byCard[name] = []
+          byCard[name].push(s)
         })
-        setSnapshots(deduped)
+        setHistoryByCard(byCard)
+        // Latest snapshot per card for display
+        const latest = Object.values(byCard).map((snaps) => snaps[snaps.length - 1])
+        setSnapshots(latest)
       }
     }
     fetchData()
@@ -319,7 +325,7 @@ export default function Home() {
                         </p>
                       </div>
                       <div className="h-12">
-                        <Sparkline snap={heroSnap} />
+                        <Sparkline history={historyByCard[heroSnap.cards.name] ?? [heroSnap]} />
                       </div>
                     </div>
 
@@ -571,7 +577,7 @@ export default function Home() {
 
                   {/* Sparkline */}
                   <div className="h-10 mb-4">
-                    <Sparkline snap={snap} />
+                    <Sparkline history={historyByCard[snap.cards.name] ?? [snap]} />
                   </div>
 
                   {/* Stats */}
