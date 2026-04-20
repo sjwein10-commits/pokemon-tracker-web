@@ -161,12 +161,7 @@ export default function BaseSet() {
     if (rarityFilter !== 'All') list = list.filter((c) => c.rarity === rarityFilter)
     if (search) list = list.filter((c) => c.name.toLowerCase().includes(search.toLowerCase()))
 
-    const getPrice = (c: CardWithData) => {
-      if (c.gradePrices?.psa9) return c.gradePrices.psa9
-      if (c.gradePrices?.psa10) return c.gradePrices.psa10
-      if (c.snapshot?.avg_price) return c.snapshot.avg_price
-      return null
-    }
+    const getPrice = (c: CardWithData) => c.snapshot?.avg_price ?? null
 
     list.sort((a, b) => {
       if (sortKey === 'number') return parseInt(a.number) - parseInt(b.number)
@@ -189,12 +184,8 @@ export default function BaseSet() {
   const hasData = (c: CardWithData) =>
     !!(c.snapshot || c.gradePrices?.psa9 || c.gradePrices?.psa10 || c.gradePrices?.psa8)
 
-  const displayPrice = (c: CardWithData) => {
-    if (c.gradePrices?.psa9) return `$${c.gradePrices.psa9}`
-    if (c.gradePrices?.psa10) return `$${c.gradePrices.psa10}`
-    if (c.snapshot?.avg_price) return `$${c.snapshot.avg_price}`
-    return '—'
-  }
+  const displayPrice = (c: CardWithData) =>
+    c.snapshot?.avg_price ? `$${c.snapshot.avg_price.toLocaleString()}` : '—'
 
   return (
     <div className="min-h-screen bg-[#09090b]">
